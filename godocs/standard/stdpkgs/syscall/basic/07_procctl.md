@@ -396,6 +396,108 @@ int setegid(gid_t gid);
 ![改变三种用户ID的函数调用的小结](imgs/chuidfuncs.jpeg)
 
 
+## system函数
+
+`ANSI C`定义了`system`函数，利用它可以方便地在程序内部执行一个`shell命令`，其原型如下：
+
+```c
+
+#include <stdlib.h>
+
+int system(const char* commandString);
+返回值：（详见下文）
+
+```
+
+Linux/Unix系统都支持`system`函数，它实际上是通过调用`fork`、`exec`和`waitpid`这三个函数来实现的，故`system`的返回值的情况比较复杂：
+
+（1）若`commandString`为`NULL`或者若`shell解释程序（如/bin/sh）`不存在时，函数的返回值为`0`。
+
+（2）若调用`fork`函数失败或者调用`waitpid`函数失败时，调用失败，函数返回`-1`，并且将设置`errno`指出失败的原因。
+
+（3）若调用`exec`函数失败（也就是`shell解释程序`无法执行），调用失败，返回值为`127`。
+
+（4）当调用`fork`、`exec`和`waitpid`函数都成功时，将返回`shell程序`执行结束时的状态字。
+
+程序`system.c`给出了`system`大致的实现方法，不过它还应加上对中断的处理。
+
+```c
+
+// system.c
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <unistd.h>
+
+int system(const char* cmdstring)
+{
+	pid_t pid;
+	int status;
+	if (cmdstring == NULL)
+		return (1);
+	if ((pid=fork()) < 0)
+	{
+		status = -1;
+	} else if (pid == 0) {
+		execl("/bin/sh", "sh", "-c", cmdstring, (char*)0);
+		_exit(127); // 如果execl调用正常，这条语句将永远部执行
+	} else {
+		while (waitpid(pid, &status, 0) < 0) // 父进程等待子进程结束
+			if (errno != EINTR) {
+				status = -1;
+				break;
+			}
+	}
+	return (status);
+}
+
+```
+
+执行`/bin/sh`时使用了选项`-c`，则`/bin/sh`将视`-c`后面的命令行参数为输入的命令，而不是标准输入，进而解释并执行该命令。如果直接利用shell来执行命令，则实现起来将会困难许多。要利用`execlp`来加入环境变量列表，同时又得对命令行进行语法分析。另外，shell提供的通配符也无法使用。注意到子进程出错退出调用的是`_exit`函数而不是`exit`函数，这是为了防止进程调用`exit`函数时将父进程的`I/O缓冲区`给刷新了。
+
+利用`system`函数而不是调用`fork`和`exec`函数的主要好处在于`system`的实现中做了许多必要对`错误码（errno）`以及`信号`的处理。`waitpid`函数也为`system`函数的实现提供了强有力的支持。在较早的系统中并没有提供`waitpid`函数，故父进程等待某一个子进程时，通常用下面的语句实现：
+
+```c
+
+while((lastpid=wait(&status)) != pid && lastpid != -1);
+
+```
+
+若父进程在执行`system`函数之前就生成了若干个子进程，那么在执行`system`函数时，如果先前的子进程结束了，则这些子进程的`结束状态字`都会因为上面的`while语句`而丢失。
+
+`system`函数存在一个安全漏洞。当在一个`set-user-ID位`被置为`1`的应用程序A中调用`system`函数运行程序B时，程序B将以程序A的权限运行。如果程序A的`真实用户ID`是`root`，这意味着程序B运行中可能会拥有过高的权限。造成这个现象的原因是`system`函数在调用`fork`函数返回之后，并且在调用`exec`函数之前没有将生成子进程的权限置为普通用户权。因此，`system`函数不能用于`set-user-ID`和`set-group-ID位`被置为`1`的程序。
+
+对比地，`Go语言`的`syscall`包内提供了如下函数：
+
+```go
+
+// `fork`和`exec`的合并，线程不安全。
+func FOrkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error)
+
+// `StartProcess`为`os`包对`ForkExec`函数进行了包装。
+func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle uintptr, err error)
+
+```
+
+`os`包和`os/exec`包内提供了更多相关的实用API。详见Go源码文档。
+
+
+## getlogin函数
+
+每个过程都可以获取`真正用户ID`、`有效用户ID`和`组ID`。一个用户可以拥有多个登录用户名并且使用相同的用户ID，虽然查看环境变量`LOGNAME`可以获取登录名，但由于用户可以修改环境变量，所以这个方法不可靠。`Linux/Unix系统`提供了`getlogin`函数来获得登录名，函数原型如下：
+
+```c
+
+#include <unistd.h>
+char* getlogin(void);
+返回值：成功：用户名字符串的首地址；失败：NULL。
+
+```
+
+若进程没有指派给用户登录所用的终端时（如后台守护进程），调用会失败。有了登录用户名，就可以通过访问文件`/etc/password`来获取这个`用户登录的信息`（如`shell类型`，`home目录`等）。
+
+
 ## times函数
 
 一个进程可以获得该进程运行时的`墙上时间（实际运行时间）`，`用户CPU时间`，`系统CPU时间`。通过调用`times函数组`可以达到这个目的，该函数地原型为：
