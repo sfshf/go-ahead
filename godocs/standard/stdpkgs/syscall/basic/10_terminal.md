@@ -636,3 +636,89 @@ type Termios struct {
 int ioctl(int filedes, int request, ...);
 
 ```
+
+`ioctl函数`至少有两个参数：`filedes`是一个文件描述符，用在`ioctl`中就通常是对应着一个`外设`，如`终端`、`网卡`等。表示`ioctl`将要对这个外设进行操作；`request`是操作字，表示所要进行的操作；此后还有若干任选参数。
+
+`termios结构`能与`ioctl`联用。使用格式如下：
+
+```c
+
+#include <termios.h>
+
+int ttyfd;
+struct termios old_term;
+... ...
+ioctl(ttyfd, TCGETA, &old_term);
+
+```
+
+在上面的例子里，`ioctl`调用把`ttyfd`对应终端的现行状态存入类型为`termios`的结构`tsaved`中，`ttyfd`必需是描述终端文件的文件描述符。`TCGETA`是一个在头文件`<term.h>`中定义的符号常量，是`GET Attribute`的意思，表示要`ioctl`执行的操作是取属性。
+
+与`GET`相对应的就是`SET`。`TCSETA`操作字就表示要`ioctl`设置终端属性。下面的应用程序段可以把`ttyfd`所对应的终端设置为新的状态。
+
+```c
+
+#include <termios.h>
+int ttyfd;
+struct termios tnew;
+... ...
+ioctl(ttyfd, TCSETA, &new);
+
+```
+
+前面已经介绍了用于标准Unix终端的`ioctl`的基本功能，下面将讨论`ioctl`在标准终端接口上的使用。
+
+下面的应用程序段给出了重新定义终端的`KILL`字段的方法：
+
+```c
+
+struct termios tty_des;
+/* 获取初始终端属性 */
+ioctl(0, TCGETA, &tty_des);
+tty_des, c_cc[VKILL] = 031; /* Ctrl+y */
+/* 重新设置终端属性 */
+ioctl(0, TCSETA, &tty_des);
+
+```
+
+这个例子给出了改变终端状态的最安全的方法：先取终端的当前状态，再改变所需改动的状态参数，然后根据修改后的`termio结构`改变终端的状态。推荐读者再对终端进行控制时，都采用这样的安全措施。
+
+对终端操作的`ioctl`调用可以分为两个类型：`主调用（primary call）`和`附加调用（additional call）`。主调用的使用格式如下：
+
+```c
+
+#include <termios.h>
+struct termios targ;
+int ttyfd, cmd, retval;
+... ...
+retval=ioctl(ttyfd, cmd, &targ);
+
+```
+
+在主调用格式下，参数`ttyfd`必需是终端文件的描述符。参数`targ`是一个`termios`类型的结构，它存放终端状态。参数`cmd`确定了`ioctl`将对终端执行什么操作，它所取的值在头文件`<term.h>`内定义，下面给出这些值及其意义：
+
+- `TCGETA`：指定`ioctl`把终端的当前状态参数复制到`targ`中。
+- `TCSETA`：它是`TCGETA`的逆操作，它按照`targ`中的值来设置终端的状态参数。它的作用是即时的，如果终端驱动程序同时正在对终端做写操作，并且又改变了`c_oflags`域，那么就会出错。
+- `TCSETAW`：它完成与`TCSETA`同样的功能，但是它要等当前`输出队列`为空后，才设置新的参数。因此，当涉及关于终端输出的参数时，应该用此值。
+- `TCSETAF`：它也完成与`TCSETA`同样的功能，但是它要当前`输出队列`为空，然后清空`输入队列`，再按照`targ`中的值来设置终端参数。
+
+`ioctl`的附加调用提供了一些对`输入队列`和`输出队列`的控制，它的使用格式如下：
+
+```c
+
+#include <termios.h>
+
+int ttyfd, cmd, arg, retval;
+retval=ioctl(ttyfd, cmd, arg);
+
+```
+
+参数`ttyfd`和`cmd`的意义与主调用相同。参数`arg`提供一些附加信息。参数`cmd`可以取下列值：
+
+- `TCFLSH`：如果`arg`为`0`，就清空`输入队列`--也就是说，把`输入队列`中剩下的字符都排空。如果`arg`为`1`，就清空`输出队列`。如果`arg`为`2`，就既清空`输入队列`又清空`输出队列`。
+- `TCXONC`：它提供对终端驱动程序的启动/停止控制。当`arg`为`0`时，输出被暂停。如果把`arg`置为`1`后再一次调用`ioctl`，则可重新启动输出。
+- `TCBRK`：它被用于发一个`BREAK`信号，只有当输出队列为空时，才发此信号。
+
+如果`ioctl`调用过程中出现了错误，则返回值`retval`为`-1`，这对于`ioctl`的主调用和附加调用均适用。
+
+### 后文：略 ###
