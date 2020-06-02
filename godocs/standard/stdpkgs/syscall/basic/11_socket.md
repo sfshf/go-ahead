@@ -357,7 +357,8 @@ func main() {
     	if cSockAddr, ok := clientSockAddr.(*syscall.SockaddrUnix); ok {
     		fmt.Fprintf(os.Stdout, "Get client: %s\n", cSockAddr.Name)
     	} else {
-    		panic("Get wrong client addr!")
+            fmt.Fprintln(os.Stderr, "Get wrong client addr!")
+			continue
     	}
 
     	buf := make([]byte, 32)
@@ -401,7 +402,62 @@ func main() {
 
 ```go
 
+package main
 
+import (
+	"fmt"
+	"net"
+	"os"
+)
+
+func main() {
+
+	unixAddr, err := net.ResolveUnixAddr("unix", "./sample-socket")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Fprintf(os.Stdout, "UnixAddr.Network = %s\n", unixAddr.Network())
+	fmt.Fprintf(os.Stdout, "UnixAddr.String = %s\n", unixAddr.String())
+
+	err = os.Remove("./sample-socket")
+	if err != nil {
+		panic(err)
+	}
+
+	unixListener, err := net.ListenUnix("unix", unixAddr)
+	if err != nil {
+		panic(err)
+	}
+
+	for {
+		unixConn, err := unixListener.AcceptUnix()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			continue
+		}
+
+		buf := make([]byte, 32)
+		_, err = unixConn.Read(buf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "%s", buf)
+
+		_, err = unixConn.Write([]byte("I have received your message!\n"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			continue
+		}
+
+		err = unixConn.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			continue
+		}
+	}
+
+}
 
 ```
 
@@ -462,7 +518,40 @@ func main() {
 
 ```go
 
+package main
 
+import (
+	"io"
+	"net"
+	"os"
+)
+
+func main() {
+
+	unixAddr, err := net.ResolveUnixAddr("unix", "./sample-socket")
+	if err != nil {
+		panic(err)
+	}
+	unixConn, err := net.DialUnix("unix", nil, unixAddr)
+	if err != nil {
+		panic(err)
+	}
+	defer unixConn.Close()
+
+	go func(dst io.Writer) {
+		_, err := io.Copy(unixConn, os.Stdin)
+		if err != nil {
+			panic(err)
+		}
+	}(unixConn)
+
+
+	_, err = io.Copy(os.Stdout, unixConn)
+	if err != nil {
+		panic(err)
+	}
+
+}
 
 ```
 
@@ -742,9 +831,419 @@ struct hostent* gethostbyaddr(const char* addr, int len, int type);
 
 在主机名查找中发生错误时，错误代码会放进`h_errno`中。调用`herror()`函数打印处错误信息和标准`perror()`一样。
 
+对比地，`Go语言`的`net`包内提供了`Resolver`结构及其方法来解析域名及地址：
+
+```go
+
+type Resolver struct {
+
+    PreferGo bool
+
+    StrictErrors bool
+
+    Dial func(ctx context.Context, network, address string) (Conn, error)
+
+}
+
+```
+
 
 ### 域名解析示例
 
 下面是一个使用`inet_aton()`、`inet_ntoa()`、`gethostbyname()`和`gethostbyaddr()`的例子。它以一个`主机名`或一个`十进制点式记法的IP地址`为参数，查找主机并打印出与该主机相关的所有主机名和IP地址。
 
 任何合法的十进制点式记法的地址都可以作为IP地址，主机名则不然。虽然在命名规则中，允许主机名全部为数字，但这容易和IP地址混淆。为此，主机名分配管理规则做了规定，所有的最高层`域`，如`.com`、`.edu`和`.org`，都是字母型的，使主机名明显区别于IP地址。
+
+示例代码：
+
+```go
+
+package main
+
+import (
+	"fmt"
+	"net"
+	"os"
+)
+
+func main() {
+
+	if len(os.Args) == 1 {
+		fmt.Fprintln(os.Stderr, "ERROR: No valid argument! Please input proper host!")
+		os.Exit(1)
+	}
+
+	fmt.Fprint(os.Stdout, "Canonical hostname:")
+	cname, err := LookupCNAME(os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	fmt.Fprintln(os.Stdout, cname)
+
+}
+
+```
+
+
+### 查询服务程序的端口号
+
+在Linux系统中，一些标准的服务程序如：`Web服务器`、`ftp服务器`、`telnet服务器`等都有自己标准的、众所周知的端口号，如`Web服务器`一般在`80端口`等待`浏览器`的连接。`IANA（Internet Assigned Numbers Authority）`对于这些众所周知端口号的分配制定了一个标准。当然，您也可以让您的服务程序不使用规定的端口，如您可以让您的Web服务器在`8000端口`等待连接。
+
+Linux系统中有一个文件`/etc/services`，它描述了该Linux系统中运行的服务程序都使用了哪些端口号。在`socket编程`中可以通过函数`getservbyname()`来访问该文件中的信息，该函数返回特定服务器的端口信息。
+
+```c
+
+#include <netdb.h>
+
+struct servent* getservbyname(const char* name, const char* protocol);
+
+```
+
+第一个参数`name`是所要查询端口号的服务名，如`ftp`、`http`等。参数`protocol`则指定该服务所用的协议，在这儿一般是指`udp协议`还是`tcp协议`。
+
+函数`getservbyname()`返回一个指针，指向含有所查询服务的信息的一个结构。下次调用该函数时，信息的内容可能被重写，因此任何要用到的该结构中的信息都应该在调用`getservbyname()`后保存下来。`getservbyname()`返回的结构形式如下：
+
+```c
+
+#include <netdb.h>
+
+struct servent {
+    char* s_name;               // service name
+    char** s_aliases;           // service aliases
+    int s_port;                 // port number
+    char* s_proto;              // protocol to use
+}
+
+```
+
+每一个服务可能有多个与之相关的名字，但一般只有一个对应的端口号。这儿，`s_name`列出了该服务的规范名称，`s_port`是该服务所使用的端口号（以网络字节顺序表示），`s_proto`是该服务所使用的协议（例如：`tcp协议`）。`s_aliases`是该服务别名的指针数组，以空指针结束。
+
+如果函数操作失败，会返回空指针，并设置`h_errno`值。
+
+对比地，`Go语言`的`net`包内提供的`Resolver`结构提供了如下方法：
+
+```go
+
+func (r *Resolver) LookupSRV(ctx context.Context, service, proto, name string) (cname string, addrs []*SRV, err error)
+
+// `SRV`代表一个DNS SRV记录。
+type SRV struct {
+    Target string
+    Port uint16
+    Priority uint16
+    Priority uint16
+    Weight uint16
+}
+
+```
+
+以及包函数`LookupSRV`：
+
+```go
+/*
+    `LookupSRV`尝试解析给定服务，协议和域名的SRV查询。`proto`是`tcp`或`udp`。返回的记录按优先级排序，并在同一优先级内按权重随机分配。
+
+    `LookupSRV`构造DNS名称以遵循`RFC 2782`进行查找。即，它查找`_service._proto.name`。为了容纳以非标准名称发布SRV记录的服务，如果`service`和`proto`均为空字符串，则`LookupSRV`直接查找名称。
+*/
+func LookupSRV(service, proto, name string) (cname string, addrs []*SRV, err error)
+
+```
+
+另外，优秀博文一篇--[go语言net包用法](https://blog.csdn.net/chenbaoke/article/details/42782571)
+
+
+### TCP服务程序示例
+
+TCP/IP服务程序在一个端口通过`listen`等待客户程序的连接，这一点和前面讲的`unix域socket`中的一样，唯一的不同就是其中的协议不一样。下面是简单的TCP/IP服务程序。
+
+示例代码1：
+
+```go
+
+package main
+
+import (
+	"fmt"
+	"os"
+	"syscall"
+)
+
+func main() {
+
+	sockFd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		panic(err)
+	}
+	defer syscall.Close(sockFd)
+
+	err = syscall.SetsockoptInt(sockFd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+	if err != nil {
+		panic(err)
+	}
+
+	sockAddr := syscall.SockaddrInet4{
+		Port: 12345,
+		Addr: [4]byte{0, 0, 0, 0},
+	}
+
+	err = syscall.Bind(sockFd, &sockAddr)
+	if err != nil {
+		panic(err)
+	}
+
+	err = syscall.Listen(sockFd, 5)
+	if err != nil {
+		panic(err)
+	}
+
+	for {
+		clientFd, clientSockAddr, err := syscall.Accept(sockFd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+			continue
+		}
+
+		if cSockAddr, ok := clientSockAddr.(*syscall.SockaddrInet4); ok {
+			fmt.Fprintf(os.Stdout, "Get client: %v:%d\n", cSockAddr.Addr, cSockAddr.Port)
+		} else {
+			fmt.Fprintln(os.Stderr, "Get wrong client addr!")
+			continue
+		}
+
+		buf := make([]byte, 32)
+		_, err = syscall.Read(clientFd, buf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+        	err = syscall.Close(clientFd)
+       		if err != nil {
+            	fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+        		continue
+    		}
+    		continue
+		}
+
+		_, err = syscall.Write(1, buf)
+		if err != nil {
+    		fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+    		continue
+		}
+
+		_, err = syscall.Write(clientFd, []byte("I got your message!\n"))
+		if err != nil {
+			panic(err)
+		}
+
+    	err = syscall.Close(clientFd)
+    	if err != nil {
+    		fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+    		continue
+		}
+
+	}
+
+}
+
+```
+
+示例代码2：
+
+```go
+
+package main
+
+import (
+	"fmt"
+	"net"
+	"os"
+)
+
+func main() {
+
+	address := net.TCPAddr{
+		IP: net.IPv4(0, 0, 0, 0),
+		Port: 12345,
+	}
+	tcpListener, err := net.ListenTCP("tcp", &address)
+	if err != nil {
+		panic(err)
+	}
+
+	for {
+
+		tcpConn, err := tcpListener.AcceptTCP()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+			continue
+		}
+
+		buf := make([]byte, 32)
+		_, err = tcpConn.Read(buf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+			err = tcpConn.Close()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+				continue
+			}
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "%s", buf)
+
+		_, err = tcpConn.Write([]byte("I got your message!\n"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+			err = tcpConn.Close()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+				continue
+			}
+			continue
+		}
+
+		err = tcpConn.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+			continue
+		}
+
+	}
+
+}
+
+```
+
+
+### TCP客户程序示例
+
+TCP客户端与Unix域客户端类似。通常，一个socket在创建后立即通过`connect()`与服务器建立连接。唯一不同的是怎样设置被传送给`connect()`的地址。多数TCP客户程序通过`gethostbuname()`而不是文件名，来寻找要连接的主机名，然后将它们找到的地址拷贝到一个`struct sockaddr_in`中，把`struct sockaddr_in`传给`connect()`。
+
+下面是一个与上节提到的服务器进行通话的TCP客户程序。它以一个正在运行的服务器的主机名或IP地址为参数，与前面的Unix域socket客户例程实现相同的功能。
+
+示例代码1：
+
+```go
+
+package main
+
+import "syscall"
+
+func main() {
+
+	sockFd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		panic(err)
+	}
+	defer syscall.Close(sockFd)
+
+	sockaddr := syscall.SockaddrInet4{
+		Port: 12345,
+		Addr: [4]byte{0, 0, 0, 0},
+	}
+
+	err = syscall.Connect(sockFd, &sockaddr)
+	if err != nil {
+		panic(err)
+	}
+
+	buf := make([]byte, 32)
+	_, err = syscall.Read(0, buf)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = syscall.Write(sockFd, buf)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = syscall.Read(sockFd, buf)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = syscall.Write(1, buf)
+	if err != nil {
+		panic(err)
+	}
+
+	err = syscall.Close(sockFd)
+	if err != nil {
+		panic(err)
+	}
+
+}
+
+```
+
+示例代码2：
+
+```go
+
+package main
+
+import (
+	"fmt"
+	"io"
+	"net"
+	"os"
+)
+
+func main() {
+
+	address := net.TCPAddr{
+		IP: net.IPv4(0, 0, 0, 0),
+		Port: 12345,
+	}
+
+	tcpConn, err := net.DialTCP("tcp", nil, &address)
+	if err != nil {
+		panic(err)
+	}
+    defer tcpConn.Close()
+
+	go func(tcpConn *net.TCPConn) {
+
+		_, err := io.Copy(os.Stdin, tcpConn)		
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+			return
+		}
+
+	}(tcpConn)
+
+	_, err = io.Copy(tcpConn, os.Stdout)
+	if err != nil {
+		panic(err)
+	}
+
+}
+
+```
+
+
+## socket出错常量
+
+只有`socket`发生错误时才会产生`errno`。下面是指定的`socket错误`以及`错误的简短描述`。
+
+- `ENOTSOCK`：试图在不指向socket的文件描述符上运行socket下的函数。
+- `EDESTADDRREQ`：试图通过socket发送数据却没有提供`域地址`。这种情况只在使用`数据报文socket`时才会发生。
+- `EPROTOTYPE`：为socket指定的协议类型不合适。
+- `ENOPROTOOPT`：试图设置非法协议选项。
+- `EPROTONOSUPPORT`：不支持的协议请求。
+- `ESOCKTNOSUPPORT`：试图创建不支持的socket类型。
+- `EPFNOSUPPORT`：指定了不支持的协议族。
+- `EAFNOSUPPORT`：指定了不支持的地址族。
+- `EADDRINUSE`：不能为请求分配正在使用的地址。
+- `EADDRNOTAVAIL`：无法获得请求的地址。
+- `ENETDOWN`：网络连接已经断开。
+- `ENETUNREACH`：指定的网络无法连接。
+- `ENETRESET`：网络重启引起连接断掉。
+- `ECONNABORTED`：连接被程序中断。
+- `ECONNRESET`：远端重启连接。这通常表明远端计算机重启。
+- `ENOBUFS`：没有足够的缓冲区来处理请求。
+- `EISCONN`：socket连接已经建立。
+- `ENOTCONN`：函数运行前必需首先建立连接。
+- `ETIMEDOUT`：连接超时。
+- `ECONNREFUSED`：远端拒绝连接请求。
+- `EHOSTDOWN`：远端主机不在网络中。
+- `EHOSTUNREAD`：无法连接远端主机。
