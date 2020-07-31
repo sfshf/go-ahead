@@ -29,7 +29,7 @@ func insertsort(ints []int) {
         for j := i-1; ; j -- {
 
             if j >= 0 && ints[j] > key {  // 插入排序，内层循环的迭代次数取决于外层循环的索引i和数组元素值。
-                ints[j+1] = ints[j]
+                ints[j+1] = ints[j]         // 这里是一个`赋值`动作
             } else {
                 ints[j+1] = key
                 break
@@ -50,7 +50,7 @@ func insertsort2(ints []int) {
 
             if ints[j-1] > ints[j] {
 
-                ints[j-1], ints[j] = ints[j], ints[j-1]
+                ints[j-1], ints[j] = ints[j], ints[j-1] // 这里实质上有三个`赋值`动作；所以这里
 
             } else {  // 假定前i个元素是有序的
 
