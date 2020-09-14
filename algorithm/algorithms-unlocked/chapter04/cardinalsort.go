@@ -12,8 +12,6 @@ func main() {
 
 }
 
-
-
 var (
     // 0-0,1-1,2-2,...,10-A,11-B...35-Z
     tmpMap = map[rune]int {
